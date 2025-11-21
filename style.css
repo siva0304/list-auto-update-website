@@ -1,0 +1,38 @@
+body {
+  font-family: Arial;
+  padding: 20px;
+}
+
+.tabs {
+  margin-bottom: 20px;
+}
+
+.tabBtn {
+  padding: 10px 15px;
+  margin-right: 5px;
+  cursor: pointer;
+  background: #222;
+  color: white;
+  border: none;
+  border-radius: 5px;
+}
+
+.tabBtn:hover {
+  background: #444;
+}
+
+.tabContent {
+  display: none;
+  border: 1px solid #ddd;
+  padding: 15px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+td, th {
+  border: 1px solid #ccc;
+  padding: 8px;
+}

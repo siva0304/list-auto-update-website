@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Admin: Edit prices (GitHub)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Inter, Arial, sans-serif; padding:20px; background:#f6f7fb; color:#111 }
+    h1 { margin-bottom: 6px }
+    .tabs { margin-bottom: 14px }
+    .tabBtn { padding:8px 12px; margin-right:6px; border-radius:6px; border:0; cursor:pointer; background:#222; color:#fff }
+    .tabBtn.secondary { background:#555 }
+    .panel { background:#fff; padding:16px; border-radius:8px; box-shadow:0 6px 18px rgba(20,20,40,0.06); max-width:900px }
+    label { display:block; margin-top:8px; font-weight:600 }
+    input[type="number"], input[type="text"], textarea { width:100%; padding:10px; border-radius:6px; border:1px solid #ddd; margin-top:6px; box-sizing:border-box }
+    .row { display:flex; gap:12px; }
+    .col { flex:1 }
+    .btn { display:inline-block; padding:10px 14px; background:#0b65ff; color:#fff; border-radius:6px; border:0; cursor:pointer; margin-top:12px }
+    .btn.ghost { background:#e6e9f2; color:#111 }
+    pre { background:#f9fafc; padding:12px; border-radius:6px; overflow:auto }
+    .muted { color:#666; font-size:13px }
+    #status { margin-top:12px; font-weight:600 }
+    .small { font-size:13px }
+    .token-box { margin-top:10px; display:flex; gap:8px; align-items:center }
+    .danger { color:#b00020 }
+  </style>
+</head>
+<body>
+
+  <h1>Site Admin — Edit Prices</h1>
+  <div class="muted">Repo: <code>siva0304/list-auto-update-website</code> · Path: <code>data/prices.json</code></div>
+  <div class="tabs">
+    <button class="tabBtn" onclick="openTab('viewTab')">View Prices</button>
+    <button class="tabBtn secondary" onclick="openTab('editTab')">Edit Prices</button>
+  </div>
+
+  <div id="viewTab" class="panel" style="display:block">
+    <h3>Live data (fetched from data/prices.json)</h3>
+    <div id="liveData"><em>Loading...</em></div>
+    <div style="margin-top:12px">
+      <button class="btn" onclick="loadAndShow()">Reload</button>
+      <button class="btn ghost" onclick="openTab('editTab')">Edit</button>
+    </div>
+  </div>
+
+  <div id="editTab" class="panel" style="display:none">
+    <h3>Edit prices.json</h3>
+    <div class="muted small">Edit the numeric values then click <strong>Save to GitHub</strong>.</div>
+
+    <div id="formArea" style="margin-top:12px">
+      <!-- fields will be injected here -->
+      <div id="fields"></div>
+
+      <div style="margin-top:12px">
+        <label>Raw JSON (edit entire file)</label>
+        <textarea id="rawJson" rows="8" placeholder='{"packing_charge":10,"gst":5}'></textarea>
+      </div>
+
+      <div class="token-box">
+        <input id="tokenInput" type="password" placeholder="Paste GitHub Personal Access Token (session only)" style="flex:1" />
+        <button class="btn" onclick="saveToken()">Save token</button>
+      </div>
+      <div class="muted small">Token stored in <code>sessionStorage</code> for this browser tab only. <span class="danger">Do not paste on public machines.</span></div>
+
+      <div style="margin-top:12px">
+        <button class="btn" onclick="saveToGithub()">Save to GitHub</button>
+        <button class="btn ghost" onclick="discardChanges()">Discard</button>
+      </div>
+
+      <div id="status"></div>
+    </div>
+
+    <hr style="margin:18px 0" />
+    <div class="muted small">
+      Want a safer production flow? Use a server-side flow or GitHub Actions + protected deployments so tokens aren't exposed in the browser.
+    </div>
+  </div>
+
+<script>
+/* Repo details (pre-filled from your message) */
+const GITHUB_OWNER = "siva0304";
+const GITHUB_REPO  = "list-auto-update-website";
+const FILE_PATH    = "data/prices.json";
+
+/* Utility: proper base64 for unicode */
+function base64EncodeUnicode(str) {
+  // https://stackoverflow.com/a/30106551
+  return btoa(unescape(encodeURIComponent(str)));
+}
+
+/* UI helpers */
+function openTab(id) {
+  document.querySelectorAll('.panel').forEach(p => p.style.display = 'none');
+  document.getElementById(id).style.display = 'block';
+  if (id === 'viewTab') loadAndShow();
+  if (id === 'editTab') loadIntoEditor();
+}
+
+/* Load file from GitHub Pages (public site) - simpler: fetch raw file from gh pages
+   This reads the published site file (same domain) => if your site uses GitHub Pages it will load the committed version.
+   Fallback to GitHub API call if raw file not found. */
+async function fetchRawFile() {
+  // try relative path first - works on gh-pages site
+  try {
+    const res = await fetch('/' + FILE_PATH + '?t=' + Date.now(), {cache: "no-store"});
+    if (res.ok) {
+      const txt = await res.text();
+      return {content: txt, source: 'raw'};
+    }
+  } catch (e) {
+    // ignore and fallback
+  }
+
+  // fallback to GitHub API (public)
+  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${FILE_PATH}`;
+  const res = await fetch(apiUrl);
+  if (!res.ok) throw new Error('Could not fetch file (API). Status: ' + res.status);
+  const json = await res.json();
+  const decoded = atob(json.content.replace(/\n/g,''));
+  return {content: decoded, sha: json.sha, source: 'api'};
+}
+
+/* Show live data in view tab */
+async function loadAndShow() {
+  const el = document.getElementById('liveData');
+  el.innerHTML = '<em>Loading...</em>';
+  try {
+    const r = await fetchRawFile();
+    const obj = JSON.parse(r.content);
+    const pretty = JSON.stringify(obj, null, 2);
+    el.innerHTML = `<pre>${escapeHtml(pretty)}</pre><div class="muted small">Source: ${r.source}${r.sha? ' (sha: ' + r.sha.substr(0,7) + ')' : ''}</div>`;
+  } catch (err) {
+    el.innerHTML = `<div class="danger">Error loading file: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+/* Escape helper */
+function escapeHtml(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* Load file into editor fields */
+let currentFileSha = null;
+async function loadIntoEditor() {
+  document.getElementById('status').textContent = 'Loading...';
+  try {
+    const r = await fetchRawFile();
+    const obj = JSON.parse(r.content);
+    currentFileSha = r.sha || null;
+    // Generate simple input fields for top-level keys (numbers & strings)
+    const fieldsDiv = document.getElementById('fields');
+    fieldsDiv.innerHTML = '';
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      const type = typeof val === 'number' ? 'number' : 'text';
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = `
+        <label>${key}</label>
+        <input id="field_${escapeHtml(key)}" data-key="${escapeHtml(key)}" type="${type}" value="${escapeHtml(String(val))}" />
+      `;
+      fieldsDiv.appendChild(wrapper);
+    }
+    document.getElementById('rawJson').value = JSON.stringify(obj, null, 2);
+    document.getElementById('status').textContent = 'Loaded.';
+    // Load token from sessionStorage if present
+    const saved = sessionStorage.getItem('gh_token');
+    if (saved) document.getElementById('tokenInput').value = saved;
+  } catch (err) {
+    document.getElementById('fields').innerHTML = '<div class="danger">Failed to load file for editing: ' + escapeHtml(err.message) + '</div>';
+    document.getElementById('status').textContent = '';
+  }
+}
+
+/* Save token to sessionStorage for session-only convenience */
+function saveToken() {
+  const t = document.getElementById('tokenInput').value.trim();
+  if (!t) return alert('Paste your GitHub Personal Access Token (PAT) first.');
+  sessionStorage.setItem('gh_token', t);
+  alert('Token saved for this browser tab session.');
+}
+
+/* Build new JSON from fields and raw editor (raw overrides fields if changed) */
+function buildNewJson() {
+  // Start from fields
+  const fields = document.querySelectorAll('[id^="field_"]');
+  const obj = {};
+  fields.forEach(inp => {
+    const key = inp.dataset.key;
+    const raw = inp.value;
+    // If value looks like number, coerce
+    const n = Number(raw);
+    obj[key] = (!isNaN(n) && raw.trim() !== '') ? n : raw;
+  });
+
+  // If raw JSON changed, use it (give user ultimate control)
+  const raw = document.getElementById('rawJson').value.trim();
+  try {
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return parsed;
+    }
+  } catch (e) {
+    // If raw invalid, fallback to fields but warn
+    alert('Raw JSON is invalid. Falling back to field values.');
+  }
+  return obj;
+}
+
+/* Save to GitHub (API) */
+async function saveToGithub() {
+  const token = sessionStorage.getItem('gh_token') || document.getElementById('tokenInput').value.trim();
+  if (!token) return alert('Provide GitHub PAT in token input and click "Save token" or paste in the box now.');
+
+  const contentObj = buildNewJson();
+  const str = JSON.stringify(contentObj, null, 2);
+  const b64 = base64EncodeUnicode(str);
+
+  // Get file sha if not already known
+  document.getElementById('status').textContent = 'Saving to GitHub...';
+  try {
+    // First try GET to obtain current sha (in case file exists)
+    const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${FILE_PATH}`;
+    let sha = currentFileSha;
+    if (!sha) {
+      const r = await fetch(apiUrl, { headers: { Accept: 'application/vnd.github.v3+json' }});
+      if (r.ok) {
+        const j = await r.json();
+        sha = j.sha;
+      } else if (r.status === 404) {
+        sha = null; // new file
+      } else {
+        const text = await r.text();
+        throw new Error('Failed to get file info: ' + r.status + ' ' + text);
+      }
+    }
+
+    // PUT request to create or update
+    const putBody = {
+      message: sha ? 'Update prices.json via web editor' : 'Add prices.json via web editor',
+      content: b64
+    };
+    if (sha) putBody.sha = sha;
+
+    const putRes = await fetch(apiUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: 'token ' + token,
+        Accept: 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(putBody)
+    });
+
+    const putJson = await putRes.json();
+    if (!putRes.ok) {
+      const msg = putJson && putJson.message ? putJson.message : JSON.stringify(putJson);
+      throw new Error('Failed to save file: ' + msg);
+    }
+
+    // Success
+    const commitSha = putJson.commit && putJson.commit.sha ? putJson.commit.sha : null;
+    currentFileSha = putJson.content && putJson.content.sha ? putJson.content.sha : currentFileSha;
+    document.getElementById('status').innerHTML = `Saved successfully. Commit: <code>${commitSha ? commitSha.substr(0,7) : 'unknown'}</code>`;
+
+    // Update view area
+    loadAndShow();
+    // Update raw editor with what we saved
+    document.getElementById('rawJson').value = str;
+  } catch (err) {
+    document.getElementById('status').innerHTML = `<span class="danger">Error: ${escapeHtml(err.message)}</span>`;
+  }
+}
+
+/* Discard (reload file) */
+function discardChanges() {
+  loadIntoEditor();
+}
+
+/* On page load show view */
+loadAndShow();
+</script>
+
+</body>
+</html>
